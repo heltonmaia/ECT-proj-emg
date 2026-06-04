@@ -1,0 +1,202 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath}
+\usepackage[brazil]{babel}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{circuitikz}
+\usepackage{tikz}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{parskip}
+\usepackage{titlesec}
+
+\titleformat{\section}{\large\bfseries\color{blue!55!black}}{\thesection}{0.6em}{}
+\titlespacing{\section}{0pt}{1.0em}{0.3em}
+
+\setlist[itemize]{leftmargin=1.4em,itemsep=2pt,topsep=2pt}
+
+\title{\vspace{-1.2cm}\textbf{Condicionamento do sinal EMG para o ADC do ESP32-C5}}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-1.6cm}
+
+\section{O problema}
+
+O módulo sensor (\textbf{EMG Raw}, amplificador de instrumentação alimentado em
+\textbf{$\pm$9\,V}) entrega uma saída \textbf{bipolar}: o sinal oscila para os
+\emph{dois} lados em torno de 0\,V. Já o ADC do ESP32-C5 (GPIO1) lê apenas a
+faixa \textbf{0--3,3\,V}. Resultado: toda a metade \emph{negativa} do EMG é
+cortada em 0\,V pela proteção de entrada do conversor --- o sinal
+\textbf{clipa embaixo} e perdemos metade da informação.
+
+\section{Evidência (testes feitos no C5)}
+
+Leitura via \texttt{ADC.ATTN\_11DB} + \texttt{read\_u16()} (escala 0--65535
+$\leftrightarrow$ $\sim$0--3,3\,V):
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+ & \texttt{c5\_test\_01} & \texttt{c5\_test\_2k} \\
+\midrule
+Amostras presas em \textbf{0} (trilho de baixo) & \textbf{15,8\,\%} & \textbf{25,8\,\%} \\
+Pico máximo atingido & 22661 ($\sim$1,14\,V) & 16420 ($\sim$0,83\,V) \\
+Amostras perto de 3,3\,V (topo) & \textbf{0\,\%} & \textbf{0\,\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Diagnóstico:} o sinal está centrado perto de 0\,V e clipa
+\emph{só embaixo}; o topo fica livre (pico $\sim$1\,V, longe dos 3,3\,V). Logo,
+\textbf{não é problema de ganho/amplitude} --- é \textbf{offset}. A correção é
+deslocar o sinal para a metade da escala ($\sim$1,65\,V).
+
+\begin{center}
+\begin{tikzpicture}[scale=0.95]
+  % ---- ANTES ----
+  \begin{scope}[xshift=0cm]
+    \draw[->,gray] (0,0) -- (4.3,0) node[right,black]{\footnotesize t};
+    \draw[->,gray] (0,-0.2) -- (0,2.4) node[above,black]{\footnotesize ADC};
+    \draw[dashed,gray] (0,2.2) -- (4,2.2) node[right,black]{\footnotesize 3,3\,V};
+    \node[gray,left] at (0,0) {\footnotesize 0};
+    \draw[very thick,red!75!black,domain=0:4,samples=160]
+        plot (\x,{max(0, 0.45 + 0.9*sin(\x*180))});
+    \node[red!75!black] at (2,-0.55) {\footnotesize \textbf{Antes:} metade cortada em 0};
+  \end{scope}
+  % ---- DEPOIS ----
+  \begin{scope}[xshift=6.5cm]
+    \draw[->,gray] (0,0) -- (4.3,0) node[right,black]{\footnotesize t};
+    \draw[->,gray] (0,-0.2) -- (0,2.4) node[above,black]{\footnotesize ADC};
+    \draw[dashed,gray] (0,2.2) -- (4,2.2) node[right,black]{\footnotesize 3,3\,V};
+    \draw[dash dot,blue!55!black] (0,1.1) -- (4,1.1) node[right,black]{\footnotesize 1,65\,V};
+    \node[gray,left] at (0,0) {\footnotesize 0};
+    \draw[very thick,green!45!black,domain=0:4,samples=160]
+        plot (\x,{1.1 + 0.85*sin(\x*180)});
+    \node[green!45!black] at (2,-0.55) {\footnotesize \textbf{Depois:} sinal inteiro centrado};
+  \end{scope}
+\end{tikzpicture}
+\end{center}
+
+\section{Solução --- circuito de acoplamento AC + bias de meia-escala}
+
+Coloca-se um capacitor em série (bloqueia o nível DC do sensor e deixa passar o
+EMG) e um divisor resistivo igual entre 3V3 e GND, que fixa o ponto de repouso
+em 1,65\,V. O sinal passa a ``flutuar'' em torno do meio da escala do ADC.
+
+\begin{center}
+\begin{circuitikz}[american,scale=1.05,transform shape]
+  % input node
+  \draw (0,0) node[left]{\textbf{SIG} \footnotesize(sensor)}
+        to[C, l=$C_1$, a=\SI{10}{\micro\farad}, o-] (3,0) coordinate(N);
+  % node to ADC
+  \draw (N) to[short,-o] (6.2,0) node[right]{\textbf{GPIO1} \footnotesize(ADC1\_CH0)};
+  \node[circ] at (N){};
+  % upper resistor to 3V3
+  \draw (N) to[R, l=$R_1$, a=\SI{10}{\kilo\ohm}] (3,2.3)
+        node[above]{\textbf{3V3}};
+  % lower resistor to GND
+  \draw (N) to[R, l_=$R_2$, a_=\SI{10}{\kilo\ohm}] (3,-2.3)
+        node[ground]{};
+\end{circuitikz}
+\end{center}
+
+\textbf{Valores:}
+\begin{itemize}
+  \item $R_1 = R_2 = \SI{10}{\kilo\ohm}$ \;(divisor $\Rightarrow$ bias em
+        $3{,}3/2 = \SI{1{,}65}{\volt}$).
+  \item $C_1 = \SI{10}{\micro\farad}$ \;(cerâmico ou filme; se eletrolítico,
+        \textbf{+} para o lado do divisor).
+  \item Corte do passa-alta: $f_c = \dfrac{1}{2\pi\,(R_1\!\parallel\!R_2)\,C_1}
+        \approx \SI{3}{\hertz}$ --- passa toda a banda do EMG (20--240\,Hz) e
+        ainda remove deriva/movimento abaixo de 3\,Hz.
+\end{itemize}
+
+\textbf{Por que 10\,k$\Omega$\ e não 100\,k$\Omega$:} resistências altas
+deixam a impedância vista pelo ADC elevada e atrapalham a leitura em 1--2\,kHz.
+Com 10\,k$\Omega$\ a impedância fica baixa o suficiente. Se quiser o
+\emph{mais robusto}, colocar um \textbf{buffer} (seguidor de tensão com op-amp
+rail-to-rail, ex.\ MCP6002 em 3,3\,V) entre o nó central e o GPIO1.
+
+\textbf{Proteção (opcional, recomendada depois):} um resistor série de
+$\sim$1\,k$\Omega$\ até o GPIO1 e um clamp Schottky (ex.\ BAT54S) para
+3V3/GND protegem o pino se um eletrodo soltar e gerar transiente.
+
+\section{Se o sinal cortar em cima (estourar 3,3\,V)}
+
+É o caso \emph{oposto} do offset: aqui o problema é \textbf{amplitude/ganho
+grande demais} --- o pico-a-pico não cabe na janela e os picos grudam em
+65535. Antes de atenuar, descubra \textbf{onde} corta:
+
+\begin{itemize}
+  \item \textbf{No ADC} --- saída do sensor saudável, mas, depois de centrar em
+        1,65\,V, o swing passa de $\pm$1,65\,V $\Rightarrow$ \emph{atenuação resolve}.
+  \item \textbf{Na própria saída do amplificador} --- o CI de instrumentação já
+        satura contra os $\pm$9\,V e entrega um topo achatado $\Rightarrow$
+        atenuar depois \emph{não recupera nada}; tem que \textbf{reduzir o ganho
+        do módulo}.
+\end{itemize}
+
+\textbf{Como distinguir:} medir o SIG com multímetro (AC) ou osciloscópio na
+contração máxima; ou, no firmware, contar amostras $==65535$ --- topo
+``reto'' por vários ms indica saturação do amplificador, não pico passageiro.
+Obs.: \texttt{ATTN\_11DB} já é a \emph{faixa máxima} do ADC; não dá pra abrir
+mais por firmware.
+
+\textbf{Soluções (ordem de preferência):}
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
+  \item \textbf{Reduzir o ganho na fonte} --- aumentar o $R_g$ (ou trimpot) do
+        módulo. Melhor opção, e a \emph{única} se o amplificador estiver saturando.
+  \item \textbf{Atenuador na rede de bias} --- resistor série $R_a$ antes do nó:
+\end{enumerate}
+
+\begin{center}
+\begin{circuitikz}[american,scale=0.95,transform shape]
+  \draw (0,0) node[left]{\textbf{SIG}} to[C, l=$C_1$, o-] (2,0)
+        to[R, l=$R_a$] (4.3,0) coordinate(N);
+  \draw (N) to[short,-o] (6.5,0) node[right]{\textbf{GPIO1}};
+  \node[circ] at (N){};
+  \draw (N) to[R, l=$R_1$] (4.3,1.9) node[above]{\textbf{3V3}};
+  \draw (N) to[R, l_=$R_2$] (4.3,-1.9) node[ground]{};
+\end{circuitikz}
+\end{center}
+
+\noindent
+Atenuação $\approx \dfrac{R_1\!\parallel\!R_2}{R_a + (R_1\!\parallel\!R_2)}$.
+Ex.: $R_a=\SI{10}{\kilo\ohm}$ com $R_1=R_2=\SI{10}{\kilo\ohm}$ $\Rightarrow$
+divide por 3. Mire deixar o pico-a-pico \textbf{$\leq$2,5\,V} (folga até os
+trilhos). $R_a$ grande sobe de novo a impedância vista pelo ADC --- se
+precisar atenuar muito, vá pro op-amp.
+
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt,start=3]
+  \item \textbf{Estágio com op-amp} rail-to-rail (3,3\,V) com \emph{ganho $<1$ +
+        offset de 1,65\,V} --- ajusta amplitude e centro juntos, com baixa
+        impedância pro ADC. Solução definitiva quando aperta.
+\end{enumerate}
+
+\textbf{Atenção:} se o sinal \emph{chega} a bater no topo, a proteção
+(clamp Schottky BAT54S + série $\sim$1\,k$\Omega$) deixa de ser opcional ---
+é o que evita estourar o GPIO com tensão acima de 3,3\,V.
+
+\section{Checagem rápida depois de montar}
+
+Para confirmar que o condicionamento funcionou, observe os valores do ADC
+(\texttt{read\_u16()}, escala 0--65535):
+
+\begin{itemize}
+  \item \textbf{Em repouso:} o sinal deve oscilar \emph{em torno do meio}
+        ($\sim$32000 = 1,65\,V) --- e não mais perto de 0.
+  \item \textbf{Durante a contração:} amplitude maior, mas ainda
+        \emph{dentro} da faixa.
+  \item \textbf{Quase nenhuma amostra} deve grudar em \textbf{0} (corte embaixo)
+        nem em \textbf{65535} (corte em cima). Se grudar, volte às seções
+        anteriores conforme o lado que estiver cortando.
+\end{itemize}
+
+\end{document}
