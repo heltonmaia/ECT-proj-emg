@@ -422,7 +422,7 @@ import pandas as pd
 
 FS = 500
 DURATION = 30
-PROMPT_TIMES = [0, 5, 10, 15, 20, 25]
+PROMPT_TIMES = [0, 6, 11, 16, 21, 25]
 PROMPT_LABELS = [0, 1, 0, 1, 0, 1]   # 0 = aberta, 1 = fechada
 
 
