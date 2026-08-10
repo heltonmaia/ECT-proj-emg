@@ -1,0 +1,38 @@
+# Sweep results — Classificador EMG 500 Hz
+# Generated: 2026-05-23 21:59:46
+# Total configs tested: 30
+# Dataset: 2440 windows × 4 features
+
+## Top 5 configs (by mean LOGO accuracy)
+
+#   feature_set   depth   n_feat  mean_acc    std_acc   
+1   baseline      5       4       0.9033      0.0156
+2   +VAR          5       5       0.9029      0.0154
+3   +ZC           3       5       0.9020      0.0108
+4   baseline      3       4       0.9016      0.0108
+5   +VAR          3       5       0.9016      0.0108
+
+## Winner
+
+feature_set: baseline
+max_depth:   5
+n_features:  4
+mean_acc:    0.9033
+std_acc:     0.0156
+
+## Classification report (LOGO aggregated)
+
+              precision    recall  f1-score   support
+
+  aberta (0)     0.8540    0.9730    0.9096      1220
+ fechada (1)     0.9686    0.8336    0.8960      1220
+
+    accuracy                         0.9033      2440
+   macro avg     0.9113    0.9033    0.9028      2440
+weighted avg     0.9113    0.9033    0.9028      2440
+
+## Confusion matrix (absolute counts)
+
+             Predicted aberta  Predicted fechada
+True aberta        1187                33
+True fechada        203              1017
